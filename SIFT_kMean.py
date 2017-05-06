@@ -9,11 +9,11 @@ import pandas as pd
 
 datasetpath = './images'
 PRE_ALLOCATION_BUFFER = 100  # for sift
-NUMBER_OF_DESCRIPTOR = 20  # for sift
+NUMBER_OF_DESCRIPTOR = 100  # for sift
 EXTENSIONS = [".jpg", ".bmp", ".png", ".pgm", ".tif", ".tiff"]
 CODEBOOK_FILE = 'codebook.file'
 K_THRESH = 1  # early stopping threshold for kmeans originally at 1e-5, increased for speedup
-HISTOGRAMS_FILE = 'trainingdata.svm'
+HISTOGRAMS_FILE = 'trainingdata_svm.csv'
 
 
 def get_categories(datasetpath):
@@ -99,9 +99,11 @@ if __name__ == '__main__':
     all_files_labels = {}
     all_features = {}
     cat_label = {}
+    cat_dic={}
     for cat, label in zip(cats, range(ncats)):
         cat_path = join(datasetpath, cat)
         cat_files = get_imgfiles(cat_path)
+        cat_dic[cat]=cat_files
         cat_features = extractSift(cat_files)
         all_files = all_files + cat_files
         all_features.update(cat_features)
@@ -113,7 +115,7 @@ if __name__ == '__main__':
     print "## computing the visual words via k-means"
     all_features_array = dict2numpy(all_features)
     nfeatures = all_features_array.shape[0]
-    nclusters = int(sqrt(nfeatures))
+    nclusters = int(sqrt(nfeatures/2))
     codebook, distortion = vq.kmeans(all_features_array,
                                      nclusters,
                                      thresh=K_THRESH)
@@ -130,26 +132,19 @@ if __name__ == '__main__':
     columns.append('flower_name')
     df = pd.DataFrame(columns=columns)
 
-    for imagefname in all_features:
-        word_histgram = computeHistograms(codebook, all_features[imagefname])
-        #create dataframe to store histogram of visual word occurences
-        print type(word_histgram)
-        # Convert feature vector to a list
-        result = numpy.squeeze(word_histgram).tolist()
-        result.append(imagefname)
-        label=all_files_labels[imagefname]
-        flower_name=cat_label[label]
-        result.append(flower_name)
-        all_word_histgrams[imagefname] = word_histgram
+    for cat in cat_dic:
+        for imagefname in cat_dic[cat]:
+            word_histgram = computeHistograms(codebook, all_features[imagefname])
+            # create dataframe to store histogram of visual word occurences
+            # Convert feature vector to a list
+            result = numpy.squeeze(word_histgram).tolist()
+            result.append(imagefname)
+            result.append(cat)
+            df.loc[len(df)] = result
 
     print "---------------------"
     print "## write the histograms to file to pass it to the svm"
-    writeHistogramsToFile(nclusters,
-                          all_files_labels,
-                          all_files,
-                          all_word_histgrams,
-                          datasetpath + HISTOGRAMS_FILE)
-
+    df.to_csv(datasetpath + HISTOGRAMS_FILE,index_label="ID")
     print "---------------------"
     print "## train svm"
 
