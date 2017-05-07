@@ -8,8 +8,8 @@ import cPickle
 import pandas as pd
 
 datasetpath = './images'
-PRE_ALLOCATION_BUFFER = 100  # for sift
-NUMBER_OF_DESCRIPTOR = 100  # for sift
+PRE_ALLOCATION_BUFFER = 600  # for sift
+NUMBER_OF_DESCRIPTOR = 600  # for sift
 EXTENSIONS = [".jpg", ".bmp", ".png", ".pgm", ".tif", ".tiff"]
 CODEBOOK_FILE = 'codebook.file'
 K_THRESH = 1  # early stopping threshold for kmeans originally at 1e-5, increased for speedup
@@ -47,14 +47,22 @@ def dict2numpy(dict):
     return array
 
 
-def extractSift(input_files):
+def extractSift(input_files,mask=False):
     print "extracting Sift features"
     all_features_dict = {}
     for i, fname in enumerate(input_files):
         img = cv2.imread(fname)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         sift = cv2.SIFT(NUMBER_OF_DESCRIPTOR)
-        kp, des = sift.detectAndCompute(gray, None)
+        if (mask):
+            (h, w) = img.shape[:2]
+            (cX, cY) = ((int)(w * 0.5), (int)(h * 0.5))
+            (axesX, axesY) = ((int)((w * 0.8) / 2), (int)((h * 0.8) / 2))
+            ellipMask = numpy.zeros(img.shape[:2], dtype="uint8")
+            cv2.ellipse(ellipMask, (cX, cY), (axesX, axesY), 0, 0, 360, 255, -1)
+            kp, des = sift.detectAndCompute(gray,ellipMask, None)
+        else:
+            kp, des = sift.detectAndCompute(gray, None)
         print "calculating sift features for: ", fname, "Descriptor :", str(des.shape)
         all_features_dict[fname] = des
     return all_features_dict
@@ -66,6 +74,7 @@ def computeHistograms(codebook, descriptors):
                                               bins=range(codebook.shape[0] + 1),
                                               normed=True)
     return histogram_of_words
+
 
 def writeHistogramsToFile(nwords, labels, fnames, all_word_histgrams, features_fname):
     data_rows = zeros(nwords + 1)  # +1 for the category label
