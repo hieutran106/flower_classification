@@ -8,8 +8,8 @@ import cPickle
 import pandas as pd
 
 datasetpath = './images'
-PRE_ALLOCATION_BUFFER = 600  # for sift
-NUMBER_OF_DESCRIPTOR = 600  # for sift
+PRE_ALLOCATION_BUFFER = 300  # for sift
+NUMBER_OF_DESCRIPTOR = 300  # for sift
 EXTENSIONS = [".jpg", ".bmp", ".png", ".pgm", ".tif", ".tiff"]
 CODEBOOK_FILE = 'codebook.file'
 K_THRESH = 1  # early stopping threshold for kmeans originally at 1e-5, increased for speedup
@@ -30,10 +30,23 @@ def get_imgfiles(path):
                       if splitext(fname)[-1].lower() in EXTENSIONS])
     return all_files
 
+def dict2numpy(dict, total_features):
+    array = zeros((total_features, 128),dtype=numpy.float32)
+    pivot = 0
+    for key in dict.keys():
+        value = dict[key]
+        nelements = value.shape[0]
+        while pivot + nelements > array.shape[0]:
+            padding = zeros_like(array)
+            array = vstack((array, padding))
+        array[pivot:pivot + nelements] = value
+        pivot += nelements
+    array = resize(array, (pivot, 128))
+    return array
 
-def dict2numpy(dict):
+def dict2numpy_old(dict):
     nkeys = len(dict)
-    array = zeros((nkeys * PRE_ALLOCATION_BUFFER, 128))
+    array = zeros((nkeys * PRE_ALLOCATION_BUFFER, 128),dtype=numpy.float16)
     pivot = 0
     for key in dict.keys():
         value = dict[key]
@@ -47,25 +60,30 @@ def dict2numpy(dict):
     return array
 
 
-def extractSift(input_files,mask=False):
-    print "extracting Sift features"
+def extractSift(input_files, mask=False):
     all_features_dict = {}
+    num_descriptor = 0
     for i, fname in enumerate(input_files):
         img = cv2.imread(fname)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        sift = cv2.SIFT(NUMBER_OF_DESCRIPTOR)
+        #sift = cv2.SIFT(NUMBER_OF_DESCRIPTOR)
+        sift = cv2.SIFT(contrastThreshold=0.06)
         if (mask):
             (h, w) = img.shape[:2]
             (cX, cY) = ((int)(w * 0.5), (int)(h * 0.5))
             (axesX, axesY) = ((int)((w * 0.8) / 2), (int)((h * 0.8) / 2))
             ellipMask = numpy.zeros(img.shape[:2], dtype="uint8")
             cv2.ellipse(ellipMask, (cX, cY), (axesX, axesY), 0, 0, 360, 255, -1)
-            kp, des = sift.detectAndCompute(gray,ellipMask, None)
+            kp, des = sift.detectAndCompute(gray, ellipMask, None)
         else:
             kp, des = sift.detectAndCompute(gray, None)
-        print "calculating sift features for: ", fname, "Descriptor :", str(des.shape)
+
+        if (len(kp)==0):
+            print "No feature found for image :",fname
+        else:
+            num_descriptor += len(des)
         all_features_dict[fname] = des
-    return all_features_dict
+    return all_features_dict, num_descriptor
 
 
 def computeHistograms(codebook, descriptors):
@@ -74,24 +92,6 @@ def computeHistograms(codebook, descriptors):
                                               bins=range(codebook.shape[0] + 1),
                                               normed=True)
     return histogram_of_words
-
-
-def writeHistogramsToFile(nwords, labels, fnames, all_word_histgrams, features_fname):
-    data_rows = zeros(nwords + 1)  # +1 for the category label
-    for fname in fnames:
-        histogram = all_word_histgrams[fname]
-        if (histogram.shape[0] != nwords):  # scipy deletes empty clusters
-            nwords = histogram.shape[0]
-            data_rows = zeros(nwords + 1)
-            print 'nclusters have been reduced to ' + str(nwords)
-        data_row = hstack((labels[fname], histogram))
-        data_rows = vstack((data_rows, data_row))
-    data_rows = data_rows[1:]
-    fmt = '%i '
-    for i in range(nwords):
-        fmt = fmt + str(i) + ':%f '
-    savetxt(features_fname, data_rows, fmt)
-
 
 
 if __name__ == '__main__':
@@ -108,35 +108,41 @@ if __name__ == '__main__':
     all_files_labels = {}
     all_features = {}
     cat_label = {}
-    cat_dic={}
+    cat_dic = {}
+    total_descriptor = 0
     for cat, label in zip(cats, range(ncats)):
         cat_path = join(datasetpath, cat)
         cat_files = get_imgfiles(cat_path)
-        cat_dic[cat]=cat_files
-        cat_features = extractSift(cat_files)
+        cat_dic[cat] = cat_files
+        cat_features, nDes = extractSift(cat_files, mask=True)
+        print "Features for images in category \"", cat, "\":", str(nDes)
+        total_descriptor += nDes
         all_files = all_files + cat_files
         all_features.update(cat_features)
         cat_label[cat] = label
         for i in cat_files:
             all_files_labels[i] = label
 
+    print "Total features extracted:", str(total_descriptor)
     print "---------------------"
     print "## computing the visual words via k-means"
-    all_features_array = dict2numpy(all_features)
+    all_features_array = dict2numpy(all_features, total_descriptor)
     nfeatures = all_features_array.shape[0]
-    nclusters = int(sqrt(nfeatures/2))
+    nclusters = int(sqrt(nfeatures / 2))
+    nclusters=100
+    print "Number of cluster:", nclusters
     codebook, distortion = vq.kmeans(all_features_array,
                                      nclusters,
                                      thresh=K_THRESH)
-    print "k-Means terminated. Number of cluster: <codebook.shape> ", codebook.shape[0]
+    print "k-Means terminated."
     with open(datasetpath + CODEBOOK_FILE, 'wb') as f:
         # save codebook into a binary file
         cPickle.dump(codebook, f, protocol=cPickle.HIGHEST_PROTOCOL)
 
     print "## compute the visual words histograms for each image"
-    print "Number of cluster: <ncluster>",nclusters
+    print "Number of cluster: <ncluster>", nclusters
     all_word_histgrams = {}
-    columns=range(0,nclusters)
+    columns = range(0, nclusters)
     columns.append('file_name')
     columns.append('flower_name')
     df = pd.DataFrame(columns=columns)
@@ -153,7 +159,6 @@ if __name__ == '__main__':
 
     print "---------------------"
     print "## write the histograms to file to pass it to the svm"
-    df.to_csv(datasetpath + HISTOGRAMS_FILE,index_label="ID")
+    df.to_csv(datasetpath + HISTOGRAMS_FILE, index_label="ID")
     print "---------------------"
     print "## train svm"
-
